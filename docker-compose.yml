@@ -1,0 +1,50 @@
+version: '3.7'
+
+services:
+    minio:
+        restart: always
+        image: minio/minio@sha256:beb5fd646b298e0e732c186215926d5ebf8cb0d2ff573bba17b4c4b22ec90ade
+        container_name: mlflow_s3
+        ports:
+            - "9000:9000"
+            - "9001:9001"
+        command: server /data --console-address ':9001' --address ':9000'
+        environment:
+            - MINIO_ROOT_USER=minio
+            - MINIO_ROOT_PASSWORD=szafeiris#@
+        volumes:
+            - ./mlflow/data/minio:/data
+
+    mc:
+        image: minio/mc@sha256:c734ae7fd20606d4b2c0cf9ef25f22e5f4185406363b9260e7c16f6fe527cfd7
+        depends_on:
+            - minio
+        container_name: mc
+        env_file:
+            - .env
+        entrypoint: >
+            /bin/sh -c "
+            /tmp/wait-for-it.sh minio:9000 &&
+            /usr/bin/mc alias set minio http://minio:9000 ${AWS_ACCESS_KEY_ID} ${AWS_SECRET_ACCESS_KEY} &&
+            /usr/bin/mc mb minio/mlflow;
+            exit 0;
+            "
+        volumes:
+            - ./mlflow/wait-for-it.sh:/tmp/wait-for-it.sh
+    
+    web:
+        restart: always
+        build: ./mlflow
+        image: mlflow_server
+        container_name: mlflow_server
+        depends_on:
+            - mc
+        ports:
+            - "5000:5000"
+        environment:
+            - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+            - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+            - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+        command: mlflow server --backend-store-uri sqlite:////mlflow/mlflow_data.db --default-artifact-root s3://mlflow/ --host 0.0.0.0
+        volumes:
+            - ./mlflow/data/mlflow:/mlflow
